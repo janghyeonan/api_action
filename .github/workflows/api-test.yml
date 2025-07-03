@@ -5,6 +5,27 @@ on:
     branches: [ main, develop ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:  # 수동 실행 옵션
+    inputs:
+      environment:
+        description: 'Test environment'
+        required: false
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+          - development
+      run_tests:
+        description: 'Run API tests'
+        required: false
+        default: true
+        type: boolean
+      docker_tag:
+        description: 'Docker image tag'
+        required: false
+        default: 'latest'
+        type: string
 
 jobs:
   api-test:
@@ -14,31 +35,78 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
     
+    - name: Print workflow trigger info
+      run: |
+        echo "Workflow triggered by: ${{ github.event_name }}"
+        echo "Repository: ${{ github.repository }}"
+        echo "Branch: ${{ github.ref }}"
+        if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+          echo "Manual execution parameters:"
+          echo "  Environment: ${{ github.event.inputs.environment }}"
+          echo "  Run tests: ${{ github.event.inputs.run_tests }}"
+          echo "  Docker tag: ${{ github.event.inputs.docker_tag }}"
+        fi
+    
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
     
     - name: Build Docker image
       run: |
-        docker build -t api-test:latest .
+        TAG="${{ github.event.inputs.docker_tag || 'latest' }}"
+        echo "Building Docker image with tag: $TAG"
+        docker build -t api-test:$TAG .
     
     - name: Run API container
       run: |
+        TAG="${{ github.event.inputs.docker_tag || 'latest' }}"
+        ENV="${{ github.event.inputs.environment || 'production' }}"
+        echo "Starting API container with tag: $TAG, environment: $ENV"
         docker run -d \
           --name api-container \
           -p 8000:8000 \
-          api-test:latest
+          -e ENVIRONMENT=$ENV \
+          api-test:$TAG
     
     - name: Wait for API to be ready
       run: |
+        echo "Waiting for API to be ready..."
         timeout 30 bash -c 'until curl -f http://localhost:8000/health; do sleep 2; done'
+        echo "API is ready!"
     
     - name: Run API tests
+      if: ${{ github.event.inputs.run_tests != 'false' }}
       run: |
+        echo "Running API tests..."
         docker run --rm \
           --network host \
           -v ${{ github.workspace }}/tests:/app/tests \
           python:3.9-slim \
           bash -c "cd /app && pip install requests pytest && python -m pytest tests/ -v"
+    
+    - name: Skip tests (manual override)
+      if: ${{ github.event.inputs.run_tests == 'false' }}
+      run: |
+        echo "Tests skipped by manual override"
+    
+    - name: Test API endpoints manually
+      run: |
+        echo "Testing API endpoints..."
+        echo "1. Health check:"
+        curl -s http://localhost:8000/health | jq '.'
+        echo "2. Root endpoint:"
+        curl -s http://localhost:8000/ | jq '.'
+        echo "3. Get user:"
+        curl -s http://localhost:8000/users/123 | jq '.'
+        echo "4. Create user:"
+        curl -s -X POST http://localhost:8000/users \
+          -H "Content-Type: application/json" \
+          -d '{"name": "Test User", "email": "test@example.com"}' | jq '.'
+    
+    - name: Show container logs
+      if: failure()
+      run: |
+        echo "Container logs:"
+        docker logs api-container
     
     - name: Stop and remove container
       if: always()
