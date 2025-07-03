@@ -1,0 +1,12 @@
+FROM python:3.9-slim
+
+WORKDIR /app
+
+# 테스트 의존성 설치
+RUN pip install pytest requests
+
+# 테스트 파일 복사
+COPY tests/ ./tests/
+
+# 테스트 실행
+CMD ["python", "-m", "pytest", "tests/", "-v"]

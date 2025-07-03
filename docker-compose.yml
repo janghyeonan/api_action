@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+
+  test:
+    build: 
+      context: .
+      dockerfile: Dockerfile.test
+    depends_on:
+      api:
+        condition: service_healthy
+    volumes:
+      - ./tests:/app/tests
+    command: python -m pytest tests/ -v
+    network_mode: "host"
