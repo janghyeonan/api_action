@@ -1,0 +1,47 @@
+name: API Test with Docker
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  api-test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Build Docker image
+      run: |
+        docker build -t api-test:latest .
+    
+    - name: Run API container
+      run: |
+        docker run -d \
+          --name api-container \
+          -p 8000:8000 \
+          api-test:latest
+    
+    - name: Wait for API to be ready
+      run: |
+        timeout 30 bash -c 'until curl -f http://localhost:8000/health; do sleep 2; done'
+    
+    - name: Run API tests
+      run: |
+        docker run --rm \
+          --network host \
+          -v ${{ github.workspace }}/tests:/app/tests \
+          python:3.9-slim \
+          bash -c "cd /app && pip install requests pytest && python -m pytest tests/ -v"
+    
+    - name: Stop and remove container
+      if: always()
+      run: |
+        docker stop api-container || true
+        docker rm api-container || true
