@@ -1,0 +1,23 @@
+name: Run Linux Commands
+
+# 수동 실행만 가능하게 설정
+on:
+  workflow_dispatch:
+
+jobs:
+  run-commands:
+    # Ubuntu 최신 버전 사용
+    runs-on: ubuntu-latest
+    
+    steps:
+    # 저장소 체크아웃 (선택사항)
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    # pwd 명령어 실행
+    - name: Print working directory
+      run: pwd
+    
+    # ls 명령어 실행
+    - name: List directory contents
+      run: ls -la
