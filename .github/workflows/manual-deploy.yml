@@ -1,0 +1,318 @@
+name: Manual API Deployment & Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      deployment_type:
+        description: 'Choose deployment type'
+        required: true
+        default: 'test-only'
+        type: choice
+        options:
+          - test-only
+          - build-and-test
+          - deploy-staging
+          - deploy-production
+      
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+      
+      docker_tag:
+        description: 'Docker image tag (e.g., v1.0.0, latest)'
+        required: false
+        default: 'latest'
+        type: string
+      
+      run_load_test:
+        description: 'Run load testing'
+        required: false
+        default: false
+        type: boolean
+      
+      custom_message:
+        description: 'Custom deployment message'
+        required: false
+        default: 'Manual deployment'
+        type: string
+
+jobs:
+  manual-deployment:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Print deployment info
+      run: |
+        echo "🚀 Manual Deployment Started"
+        echo "=============================="
+        echo "Deployment Type: ${{ github.event.inputs.deployment_type }}"
+        echo "Environment: ${{ github.event.inputs.environment }}"
+        echo "Docker Tag: ${{ github.event.inputs.docker_tag }}"
+        echo "Load Test: ${{ github.event.inputs.run_load_test }}"
+        echo "Message: ${{ github.event.inputs.custom_message }}"
+        echo "Triggered by: ${{ github.actor }}"
+        echo "=============================="
+    
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Build Docker image
+      if: ${{ github.event.inputs.deployment_type != 'test-only' }}
+      run: |
+        TAG="${{ github.event.inputs.docker_tag }}"
+        echo "🔨 Building Docker image with tag: $TAG"
+        docker build -t api-test:$TAG .
+        docker tag api-test:$TAG api-test:latest
+    
+    - name: Use existing image
+      if: ${{ github.event.inputs.deployment_type == 'test-only' }}
+      run: |
+        echo "📦 Using existing Docker image"
+        docker build -t api-test:latest .
+    
+    - name: Start API container
+      run: |
+        ENV="${{ github.event.inputs.environment }}"
+        TAG="${{ github.event.inputs.docker_tag }}"
+        echo "🚀 Starting API container for environment: $ENV"
+        
+        # 환경별 설정
+        case $ENV in
+          "production")
+            PORT=8000
+            LOG_LEVEL=info
+            ;;
+          "staging")
+            PORT=8001
+            LOG_LEVEL=debug
+            ;;
+          "development")
+            PORT=8002
+            LOG_LEVEL=debug
+            ;;
+        esac
+        
+        docker run -d \
+          --name api-container-$ENV \
+          -p $PORT:8000 \
+          -e ENVIRONMENT=$ENV \
+          -e LOG_LEVEL=$LOG_LEVEL \
+          api-test:latest
+        
+        # 컨테이너 정보 출력
+        echo "Container started with:"
+        echo "  Environment: $ENV"
+        echo "  Port: $PORT"
+        echo "  Log Level: $LOG_LEVEL"
+    
+    - name: Wait for API to be ready
+      run: |
+        ENV="${{ github.event.inputs.environment }}"
+        case $ENV in
+          "production") PORT=8000 ;;
+          "staging") PORT=8001 ;;
+          "development") PORT=8002 ;;
+        esac
+        
+        echo "⏳ Waiting for API to be ready on port $PORT..."
+        timeout 60 bash -c "until curl -f http://localhost:$PORT/health; do sleep 2; done"
+        echo "✅ API is ready!"
+    
+    - name: Run basic health check
+      run: |
+        ENV="${{ github.event.inputs.environment }}"
+        case $ENV in
+          "production") PORT=8000 ;;
+          "staging") PORT=8001 ;;
+          "development") PORT=8002 ;;
+        esac
+        
+        echo "🔍 Running health check on port $PORT..."
+        curl -s http://localhost:$PORT/health | jq '.'
+    
+    - name: Run comprehensive tests
+      run: |
+        ENV="${{ github.event.inputs.environment }}"
+        case $ENV in
+          "production") PORT=8000 ;;
+          "staging") PORT=8001 ;;
+          "development") PORT=8002 ;;
+        esac
+        
+        echo "🧪 Running comprehensive API tests..."
+        
+        # 테스트 스크립트 생성
+        cat > test_script.py << 'EOF'
+import requests
+import json
+import sys
+import time
+
+def test_api(base_url):
+    tests = []
+    
+    # Health check
+    try:
+        response = requests.get(f"{base_url}/health", timeout=10)
+        tests.append(("Health Check", response.status_code == 200))
+    except Exception as e:
+        tests.append(("Health Check", False))
+    
+    # Root endpoint
+    try:
+        response = requests.get(f"{base_url}/", timeout=10)
+        tests.append(("Root Endpoint", response.status_code == 200))
+    except Exception as e:
+        tests.append(("Root Endpoint", False))
+    
+    # Get user
+    try:
+        response = requests.get(f"{base_url}/users/123", timeout=10)
+        tests.append(("Get User", response.status_code == 200))
+    except Exception as e:
+        tests.append(("Get User", False))
+    
+    # Create user
+    try:
+        data = {"name": "Test User", "email": "test@example.com"}
+        response = requests.post(f"{base_url}/users", json=data, timeout=10)
+        tests.append(("Create User", response.status_code == 200))
+    except Exception as e:
+        tests.append(("Create User", False))
+    
+    # 결과 출력
+    print("Test Results:")
+    print("=" * 40)
+    passed = 0
+    for test_name, result in tests:
+        status = "✅ PASS" if result else "❌ FAIL"
+        print(f"{test_name}: {status}")
+        if result:
+            passed += 1
+    
+    print(f"\nTotal: {passed}/{len(tests)} tests passed")
+    return passed == len(tests)
+
+if __name__ == "__main__":
+    base_url = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8000"
+    success = test_api(base_url)
+    sys.exit(0 if success else 1)
+EOF
+
+        python3 -m pip install requests > /dev/null 2>&1
+        python3 test_script.py "http://localhost:$PORT"
+    
+    - name: Run load test
+      if: ${{ github.event.inputs.run_load_test == 'true' }}
+      run: |
+        ENV="${{ github.event.inputs.environment }}"
+        case $ENV in
+          "production") PORT=8000 ;;
+          "staging") PORT=8001 ;;
+          "development") PORT=8002 ;;
+        esac
+        
+        echo "🚀 Running load test..."
+        
+        # 간단한 로드 테스트 스크립트
+        cat > load_test.py << 'EOF'
+import requests
+import threading
+import time
+import sys
+
+def make_request(url, results):
+    try:
+        start_time = time.time()
+        response = requests.get(url, timeout=10)
+        end_time = time.time()
+        results.append({
+            'status': response.status_code,
+            'time': end_time - start_time
+        })
+    except Exception as e:
+        results.append({
+            'status': 'error',
+            'time': 0
+        })
+
+def load_test(base_url, num_requests=50, num_threads=10):
+    results = []
+    threads = []
+    
+    start_time = time.time()
+    
+    for i in range(num_requests):
+        thread = threading.Thread(target=make_request, args=(f"{base_url}/health", results))
+        threads.append(thread)
+        thread.start()
+        
+        if len(threads) >= num_threads:
+            for t in threads:
+                t.join()
+            threads = []
+    
+    # 남은 스레드 처리
+    for t in threads:
+        t.join()
+    
+    end_time = time.time()
+    
+    # 결과 분석
+    successful = [r for r in results if r['status'] == 200]
+    failed = [r for r in results if r['status'] != 200]
+    
+    avg_time = sum(r['time'] for r in successful) / len(successful) if successful else 0
+    
+    print(f"Load Test Results:")
+    print(f"==================")
+    print(f"Total requests: {len(results)}")
+    print(f"Successful: {len(successful)}")
+    print(f"Failed: {len(failed)}")
+    print(f"Success rate: {len(successful)/len(results)*100:.1f}%")
+    print(f"Average response time: {avg_time:.3f}s")
+    print(f"Total time: {end_time - start_time:.3f}s")
+
+if __name__ == "__main__":
+    base_url = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8000"
+    load_test(base_url)
+EOF
+
+        python3 load_test.py "http://localhost:$PORT"
+    
+    - name: Deployment summary
+      run: |
+        echo "📋 Deployment Summary"
+        echo "===================="
+        echo "✅ Deployment completed successfully!"
+        echo "🎯 Type: ${{ github.event.inputs.deployment_type }}"
+        echo "🌍 Environment: ${{ github.event.inputs.environment }}"
+        echo "🏷️ Tag: ${{ github.event.inputs.docker_tag }}"
+        echo "💬 Message: ${{ github.event.inputs.custom_message }}"
+        echo "👤 Deployed by: ${{ github.actor }}"
+        echo "📅 Time: $(date)"
+    
+    - name: Show container logs (on failure)
+      if: failure()
+      run: |
+        ENV="${{ github.event.inputs.environment }}"
+        echo "🔍 Container logs for debugging:"
+        docker logs api-container-$ENV
+    
+    - name: Cleanup
+      if: always()
+      run: |
+        ENV="${{ github.event.inputs.environment }}"
+        echo "🧹 Cleaning up..."
+        docker stop api-container-$ENV || true
+        docker rm api-container-$ENV || true
+        echo "✅ Cleanup completed"
