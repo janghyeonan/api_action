@@ -1,0 +1,316 @@
+name: Website Screenshot Capture
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      delay_seconds:
+        description: 'Delay between screenshots (seconds)'
+        required: false
+        default: '3'
+        type: string
+      sites_to_capture:
+        description: 'Sites to capture (comma-separated: naver,coupang,musinsa,google or "all")'
+        required: false
+        default: 'all'
+        type: string
+      viewport_size:
+        description: 'Viewport size'
+        required: false
+        default: '1920x1080'
+        type: choice
+        options:
+          - '1920x1080'
+          - '1366x768'
+          - '1440x900'
+          - '1280x720'
+
+jobs:
+  screenshot-capture:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Print workflow info
+      run: |
+        echo "🚀 웹사이트 스크린샷 캡처 시작"
+        echo "================================"
+        echo "트리거: ${{ github.event_name }}"
+        echo "브랜치: ${{ github.ref }}"
+        echo "실행자: ${{ github.actor }}"
+        if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+          echo "딜레이: ${{ github.event.inputs.delay_seconds }}초"
+          echo "대상 사이트: ${{ github.event.inputs.sites_to_capture }}"
+          echo "뷰포트 크기: ${{ github.event.inputs.viewport_size }}"
+        else
+          echo "딜레이: 3초 (기본값)"
+          echo "대상 사이트: 전체"
+          echo "뷰포트 크기: 1920x1080 (기본값)"
+        fi
+        echo "시간: $(date)"
+        echo "================================"
+    
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Install Playwright browsers
+      run: |
+        playwright install chromium
+        playwright install-deps
+    
+    - name: Create screenshots directory
+      run: |
+        mkdir -p screenshots
+        echo "📁 스크린샷 디렉토리 생성 완료"
+    
+    - name: Run screenshot capture
+      run: |
+        DELAY="${{ github.event.inputs.delay_seconds || '3' }}"
+        echo "⏱️ ${DELAY}초 딜레이로 스크린샷 캡처 시작..."
+        python screenshot_scraper.py $DELAY
+    
+    - name: List captured screenshots
+      run: |
+        echo "📸 캡처된 스크린샷 목록:"
+        ls -la screenshots/
+        echo ""
+        echo "📊 파일 크기 정보:"
+        du -h screenshots/*
+    
+    - name: Generate summary
+      run: |
+        echo "📋 캡처 요약 생성..."
+        
+        # 캡처된 파일 개수 확인
+        PNG_COUNT=$(ls screenshots/*.png 2>/dev/null | wc -l)
+        REPORT_COUNT=$(ls screenshots/*.txt 2>/dev/null | wc -l)
+        TOTAL_SIZE=$(du -sh screenshots/ | cut -f1)
+        
+        echo "결과 요약:" > capture_summary.txt
+        echo "=========" >> capture_summary.txt
+        echo "PNG 파일: ${PNG_COUNT}개" >> capture_summary.txt
+        echo "리포트 파일: ${REPORT_COUNT}개" >> capture_summary.txt
+        echo "총 크기: ${TOTAL_SIZE}" >> capture_summary.txt
+        echo "생성 시간: $(date)" >> capture_summary.txt
+        echo "" >> capture_summary.txt
+        
+        # 각 스크린샷 파일 정보 추가
+        if [ ${PNG_COUNT} -gt 0 ]; then
+          echo "스크린샷 파일 목록:" >> capture_summary.txt
+          for file in screenshots/*.png; do
+            if [ -f "$file" ]; then
+              filename=$(basename "$file")
+              filesize=$(du -h "$file" | cut -f1)
+              echo "  - $filename ($filesize)" >> capture_summary.txt
+            fi
+          done
+        fi
+        
+        echo "📄 요약 파일 생성 완료"
+        cat capture_summary.txt
+    
+    - name: Upload screenshots as artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: website-screenshots-${{ github.run_number }}
+        path: |
+          screenshots/
+          capture_summary.txt
+        retention-days: 30
+    
+    - name: Upload screenshots to release (on tag)
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          screenshots/*.png
+          screenshots/*.txt
+          capture_summary.txt
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Create screenshot gallery (HTML)
+      run: |
+        echo "🎨 스크린샷 갤러리 생성..."
+        
+        cat > screenshots/gallery.html << 'EOF'
+        <!DOCTYPE html>
+        <html lang="ko">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>웹사이트 스크린샷 갤러리</title>
+            <style>
+                body {
+                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                    margin: 0;
+                    padding: 20px;
+                    background-color: #f5f5f5;
+                }
+                .container {
+                    max-width: 1200px;
+                    margin: 0 auto;
+                    background: white;
+                    padding: 30px;
+                    border-radius: 10px;
+                    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                }
+                h1 {
+                    text-align: center;
+                    color: #333;
+                    margin-bottom: 30px;
+                }
+                .info {
+                    background: #e3f2fd;
+                    padding: 15px;
+                    border-radius: 5px;
+                    margin-bottom: 30px;
+                    border-left: 4px solid #2196f3;
+                }
+                .gallery {
+                    display: grid;
+                    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+                    gap: 20px;
+                }
+                .screenshot-item {
+                    background: white;
+                    border-radius: 8px;
+                    overflow: hidden;
+                    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+                    transition: transform 0.3s ease;
+                }
+                .screenshot-item:hover {
+                    transform: translateY(-5px);
+                }
+                .screenshot-item img {
+                    width: 100%;
+                    height: 200px;
+                    object-fit: cover;
+                    cursor: pointer;
+                }
+                .screenshot-info {
+                    padding: 15px;
+                }
+                .site-name {
+                    font-weight: bold;
+                    font-size: 18px;
+                    color: #333;
+                    margin-bottom: 5px;
+                }
+                .site-url {
+                    color: #666;
+                    font-size: 14px;
+                    margin-bottom: 10px;
+                }
+                .file-info {
+                    font-size: 12px;
+                    color: #999;
+                }
+                .modal {
+                    display: none;
+                    position: fixed;
+                    z-index: 1000;
+                    left: 0;
+                    top: 0;
+                    width: 100%;
+                    height: 100%;
+                    background-color: rgba(0,0,0,0.9);
+                }
+                .modal-content {
+                    margin: auto;
+                    display: block;
+                    width: 90%;
+                    max-width: 1200px;
+                    max-height: 90%;
+                    object-fit: contain;
+                }
+                .close {
+                    position: absolute;
+                    top: 15px;
+                    right: 35px;
+                    color: #f1f1f1;
+                    font-size: 40px;
+                    font-weight: bold;
+                    cursor: pointer;
+                }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>🖼️ 웹사이트 스크린샷 갤러리</h1>
+                
+                <div class="info">
+                    <strong>캡처 정보:</strong><br>
+                    생성 시간: <span id="capture-time"></span><br>
+                    GitHub Run: #${{ github.run_number }}<br>
+                    브랜치: ${{ github.ref_name }}
+                </div>
+                
+                <div class="gallery" id="gallery">
+                    <!-- 스크린샷들이 여기에 동적으로 추가됩니다 -->
+                </div>
+            </div>
+            
+            <!-- 모달 -->
+            <div id="modal" class="modal">
+                <span class="close">&times;</span>
+                <img class="modal-content" id="modal-img">
+            </div>
+            
+            <script>
+                document.getElementById('capture-time').textContent = new Date().toLocaleString('ko-KR');
+                
+                // 모달 기능
+                const modal = document.getElementById('modal');
+                const modalImg = document.getElementById('modal-img');
+                const span = document.getElementsByClassName('close')[0];
+                
+                function openModal(src) {
+                    modal.style.display = 'block';
+                    modalImg.src = src;
+                }
+                
+                span.onclick = function() {
+                    modal.style.display = 'none';
+                }
+                
+                window.onclick = function(event) {
+                    if (event.target == modal) {
+                        modal.style.display = 'none';
+                    }
+                }
+            </script>
+        </body>
+        </html>
+        EOF
+        
+        echo "✅ 갤러리 HTML 생성 완료"
+    
+    - name: Display completion message
+      run: |
+        echo ""
+        echo "🎉 스크린샷 캡처 완료!"
+        echo "======================"
+        echo "✅ 모든 웹사이트의 스크린샷이 성공적으로 캡처되었습니다."
+        echo "📁 Artifacts에서 다운로드 가능합니다."
+        echo "🔗 Actions 탭 > 이 워크플로우 실행 > Artifacts 섹션에서 확인하세요."
+        echo ""
+        echo "포함된 파일:"
+        echo "  📸 PNG 스크린샷 파일들"
+        echo "  📄 상세 리포트 (TXT)"
+        echo "  📊 캡처 요약 (TXT)"
+        echo "  🎨 갤러리 뷰어 (HTML)"
+        echo ""
+        echo "Artifact 이름: website-screenshots-${{ github.run_number }}"
