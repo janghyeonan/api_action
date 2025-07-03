@@ -129,6 +129,8 @@ curl -X POST http://localhost:8000/users \
 
 ## 🔄 GitHub Actions 워크플로우
 
+### 자동 실행 (Automatic Triggers)
+
 코드를 `main` 또는 `develop` 브랜치에 푸시하거나 Pull Request를 생성하면 자동으로 다음 단계가 실행됩니다:
 
 1. **코드 체크아웃**: 저장소 코드를 가져옴
@@ -138,6 +140,52 @@ curl -X POST http://localhost:8000/users \
 5. **헬스 체크**: API 서버가 정상적으로 시작될 때까지 대기
 6. **테스트 실행**: pytest를 사용한 API 테스트 실행
 7. **정리**: 컨테이너 정지 및 제거
+
+### 수동 실행 (Manual Triggers)
+
+#### 방법 1: 기본 워크플로우 수동 실행
+
+1. GitHub 저장소의 **Actions** 탭으로 이동
+2. **API Test with Docker** 워크플로우 선택
+3. **Run workflow** 버튼 클릭
+4. 다음 옵션들을 설정:
+   - **Environment**: `production`, `staging`, `development` 중 선택
+   - **Run tests**: 테스트 실행 여부 (`true`/`false`)
+   - **Docker tag**: 이미지 태그 (예: `v1.0.0`, `latest`)
+
+#### 방법 2: 고급 수동 배포
+
+1. GitHub 저장소의 **Actions** 탭으로 이동
+2. **Manual API Deployment & Test** 워크플로우 선택
+3. **Run workflow** 버튼 클릭
+4. 다음 옵션들을 설정:
+   - **Deployment type**: 
+     - `test-only`: 테스트만 실행
+     - `build-and-test`: 빌드 후 테스트
+     - `deploy-staging`: 스테이징 배포
+     - `deploy-production`: 프로덕션 배포
+   - **Environment**: 대상 환경 선택
+   - **Docker tag**: 이미지 태그 지정
+   - **Run load test**: 로드 테스트 실행 여부
+   - **Custom message**: 배포 메시지
+
+#### 수동 실행 예시
+
+```bash
+# GitHub CLI를 사용한 수동 실행
+gh workflow run "API Test with Docker" \
+  -f environment=staging \
+  -f run_tests=true \
+  -f docker_tag=v1.0.0
+
+# 고급 배포 워크플로우 실행
+gh workflow run "Manual API Deployment & Test" \
+  -f deployment_type=deploy-staging \
+  -f environment=staging \
+  -f docker_tag=v1.0.0 \
+  -f run_load_test=true \
+  -f custom_message="Hot fix deployment"
+```
 
 ## 🧪 테스트 케이스
 
